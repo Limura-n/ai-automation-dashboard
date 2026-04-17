@@ -1,0 +1,37 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model GenerationTask {
+  id           String   @id @default(cuid())
+  type         String
+  status       String
+  prompt       String
+  style        String?
+  resolution   String?
+  duration     String?
+  fileSize     Int?
+  thumbnailUrl String?
+  outputUrl    String?
+  aiModel      String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  completedAt  DateTime?
+  errorMessage String?
+  priority     Int      @default(5)
+}
+
+model DailyStat {
+  id        String   @id @default(cuid())
+  date      String
+  type      String
+  total     Int      @default(0)
+  completed Int      @default(0)
+  failed    Int      @default(0)
+  avgTime   Float?
+}
