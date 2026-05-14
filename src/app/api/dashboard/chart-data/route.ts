@@ -5,14 +5,18 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
     const range = parseInt(searchParams.get('range') || '14')
+    const projectId = searchParams.get('projectId') || undefined
 
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - range)
 
+    const where: Record<string, unknown> = {
+      date: { gte: cutoff.toISOString().split('T')[0] },
+    }
+    if (projectId) where.projectId = projectId
+
     const stats = await db.dailyStat.findMany({
-      where: {
-        date: { gte: cutoff.toISOString().split('T')[0] },
-      },
+      where,
       orderBy: { date: 'asc' },
     })
 

@@ -1,74 +1,124 @@
 import { db } from '@/lib/db'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 
-export async function GET() {
+// ─── GET /api/dashboard/stats ─────────────────────────────────
+// Returns real business metrics scoped to a project (or all projects if no projectId).
+// Queries the actual Task / Mission / AgentTask tables — no legacy GenerationTask.
+export async function GET(request: NextRequest) {
   try {
-    const [tasks, dailyStats] = await Promise.all([
-      db.generationTask.findMany({ orderBy: { createdAt: 'desc' } }),
-      db.dailyStat.findMany({ orderBy: { date: 'asc' } }),
-    ])
+    const searchParams = request.nextUrl.searchParams
+    const projectId = searchParams.get('projectId') || undefined
 
-    const now = new Date()
-    const todayStr = now.toISOString().split('T')[0]
+    // Build scoped where clauses
+    const taskWhere: Record<string, unknown> = {}
+    const missionWhere: Record<string, unknown> = {}
+    const agentTaskWhere: Record<string, unknown> = {}
+    const agentWhere: Record<string, unknown> = {}
 
-    const totalGenerated = tasks.filter(t => t.status === 'completed').length
-    const todayTasks = tasks.filter(t => t.createdAt.toISOString().split('T')[0] === todayStr)
-    const todayGenerated = todayTasks.filter(t => t.status === 'completed').length
-    const processingNow = tasks.filter(t => t.status === 'processing').length
-    const completedCount = tasks.filter(t => t.status === 'completed').length
-    const failedCount = tasks.filter(t => t.status === 'failed').length
-    const successRate = (completedCount + failedCount) > 0
-      ? Math.round((completedCount / (completedCount + failedCount)) * 1000) / 10
-      : 100
-
-    const completedWithTime = tasks.filter(t => t.status === 'completed' && t.completedAt)
-    const avgTime = completedWithTime.length > 0
-      ? Math.round(completedWithTime.reduce((sum, t) => {
-          return sum + (t.completedAt!.getTime() - t.createdAt.getTime()) / 1000
-        }, 0) / completedWithTime.length * 10) / 10
-      : 0
-
-    const totalStorage = tasks.reduce((sum, t) => sum + (t.fileSize || 0), 0) / (1024 * 1024 * 1024)
-    const queueSize = tasks.filter(t => t.status === 'queued').length
-    const failedToday = todayTasks.filter(t => t.status === 'failed').length
-
-    const byType: Record<string, { total: number; today: number; completed: number; failed: number }> = {}
-    for (const type of ['image', 'video', 'vector']) {
-      const typeTasks = tasks.filter(t => t.type === type)
-      const typeToday = typeTasks.filter(t => t.createdAt.toISOString().split('T')[0] === todayStr)
-      byType[type] = {
-        total: typeTasks.length,
-        today: typeToday.length,
-        completed: typeTasks.filter(t => t.status === 'completed').length,
-        failed: typeTasks.filter(t => t.status === 'failed').length,
-      }
+    if (projectId) {
+      taskWhere.projectId = projectId
+      missionWhere.projectId = projectId
+      agentTaskWhere.projectId = projectId
+      agentWhere.projectId = projectId
     }
 
-    const recentActivity = tasks.slice(0, 20).map(t => ({
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+
+    // Run all queries in parallel for performance
+    const [
+      totalTasks,
+      pendingTasks,
+      inProgressTasks,
+      completedTasks,
+      failedTasks,
+      todayTasks,
+      todayCompleted,
+      totalMissions,
+      completedMissions,
+      pendingMissions,
+      inProgressMissions,
+      totalAgentTasks,
+      completedAgentTasks,
+      idleAgents,
+      busyAgents,
+      recentTasks,
+    ] = await Promise.all([
+      // ── Task counts ──────────────────────────────────────────
+      db.task.count({ where: taskWhere }),
+      db.task.count({ where: { ...taskWhere, status: 'pending' } }),
+      db.task.count({ where: { ...taskWhere, status: 'in_progress' } }),
+      db.task.count({ where: { ...taskWhere, status: 'completed' } }),
+      db.task.count({ where: { ...taskWhere, status: 'failed' } }),
+      db.task.count({ where: { ...taskWhere, createdAt: { gte: todayStart } } }),
+      db.task.count({ where: { ...taskWhere, status: 'completed', completedAt: { gte: todayStart } } }),
+
+      // ── Mission counts ───────────────────────────────────────
+      db.mission.count({ where: missionWhere }),
+      db.mission.count({ where: { ...missionWhere, status: 'completed' } }),
+      db.mission.count({ where: { ...missionWhere, status: 'pending' } }),
+      db.mission.count({ where: { ...missionWhere, status: 'in_progress' } }),
+
+      // ── AgentTask counts ─────────────────────────────────────
+      db.agentTask.count({ where: agentTaskWhere }),
+      db.agentTask.count({ where: { ...agentTaskWhere, status: 'completed' } }),
+
+      // ── SubAgent counts ──────────────────────────────────────
+      db.subAgent.count({ where: { ...agentWhere, status: 'idle' } }),
+      db.subAgent.count({ where: { ...agentWhere, status: 'busy' } }),
+
+      // ── Recent tasks (for activity feed) ─────────────────────
+      db.task.findMany({
+        where: taskWhere,
+        orderBy: { updatedAt: 'desc' },
+        take: 20,
+        select: {
+          id: true, title: true, status: true, priority: true,
+          category: true, createdAt: true, updatedAt: true, completedAt: true,
+        },
+      }),
+    ])
+
+    const totalGenerated = completedTasks
+    const todayGenerated = todayCompleted
+    const processingNow = inProgressTasks + inProgressMissions
+
+    const successRate = (completedTasks + failedTasks) > 0
+      ? Math.round((completedTasks / (completedTasks + failedTasks)) * 1000) / 10
+      : 100
+
+    const recentActivity = recentTasks.map(t => ({
       id: t.id,
-      type: t.type,
+      type: t.category || 'task',
       status: t.status,
-      prompt: t.prompt,
-      style: t.style,
-      aiModel: t.aiModel,
+      title: t.title,
       createdAt: t.createdAt.toISOString(),
-      completedAt: t.completedAt?.toISOString(),
-      errorMessage: t.errorMessage,
+      updatedAt: t.updatedAt.toISOString(),
+      completedAt: t.completedAt?.toISOString() ?? null,
     }))
 
     return NextResponse.json({
-      totalGenerated: totalGenerated * 48 + 2847,
-      todayGenerated: todayGenerated * 12 + 156,
+      totalGenerated,
+      todayGenerated,
       processingNow,
       successRate,
-      avgGenerationTime: avgTime,
-      totalStorage: Math.round(totalStorage * 100) / 100 + 4.2,
-      queueSize,
-      failedToday,
-      byType,
+      totalTasks,
+      pendingTasks,
+      completedTasks,
+      failedTasks,
+      todayTasks,
+      totalMissions,
+      completedMissions,
+      pendingMissions,
+      inProgressMissions,
+      totalAgentTasks,
+      completedAgentTasks,
+      idleAgents,
+      busyAgents,
       recentActivity,
     })
   } catch (error) {
+    console.error('Stats API error:', error)
     return NextResponse.json({ error: 'Failed to fetch stats' }, { status: 500 })
   }
 }

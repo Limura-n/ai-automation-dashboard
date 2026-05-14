@@ -7,6 +7,158 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── TASK (NEW) — User-created top-level work items ──────────
+// User creates Tasks. Limura decomposes Tasks into Missions.
+// Tasks can have cron schedules for recurring execution.
+model Task {
+  id          String       @id @default(cuid())
+  title       String
+  description String?
+  report      String?      // Final consolidated report — populated by orchestrator on completion
+  status      String       @default("pending") // pending, scheduled, in_progress, completed, failed, paused
+  priority    String       @default("normal")  // normal, high, urgent
+  schedule    String?      // cron expression (null = one-shot / on-demand only)
+  cronJobId   String?      // linked Hermes cron job ID for recurring tasks
+  category    String?      // optional grouping / domain
+  projectId   String?      // link to a project
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  completedAt DateTime?
+  missions    Mission[]
+  feedbacks   Feedback[]
+  attachments Attachment[]
+  agentQuestions AgentQuestion[]
+}
+
+// ─── ATTACHMENT (NEW) — Files linked to tasks ─────────────────
+model Attachment {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  filename  String   // original filename
+  filepath  String   // absolute path on disk
+  mimetype  String?  // e.g., image/png, application/pdf
+  size      Int      // file size in bytes
+  createdAt DateTime @default(now())
+}
+
+// ─── MISSION (MODIFIED) — Agent-decomposed work units ────────
+// Two-tier hierarchy: Phase (plan mission) → Sprint (working mission)
+// - type: "phase" = strategic segment of the vision plan
+// - type: "sprint" = execution unit within a phase
+// - type: "mission" = legacy standalone mission (backward compat)
+// Progress: phases track via completed sprints; sprints track via completed AgentTasks
+model Mission {
+  id              String      @id @default(cuid())
+  title           String
+  description     String
+  type            String      @default("mission") // "phase", "sprint", "mission" (legacy)
+  status          String      @default("pending") // pending, analyzing, assigning, in_progress, completed, failed, blocked
+  // Self-referencing hierarchy
+  parentMissionId String?     // points to parent phase (null = top-level phase or legacy mission)
+  parentMission   Mission?    @relation("MissionHierarchy", fields: [parentMissionId], references: [id])
+  childMissions   Mission[]   @relation("MissionHierarchy")
+  sortOrder       Int         @default(0)      // sequential ordering within parent phase
+  progress        Float       @default(0.0)    // 0.0 to 1.0 — auto-calculated by API
+  blockedReason   String?     // why this mission is blocked (only relevant when status=blocked)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  completedAt     DateTime?
+  summary         String?     // final report summary
+  taskId          String?     // parent task (null = standalone mission, legacy)
+  task            Task?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  projectId       String?     // scoped to a project
+  project         Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  tasks           AgentTask[]
+  feedbacks       Feedback[]
+  agentQuestions  AgentQuestion[]
+}
+
+model AgentTask {
+  id          String     @id @default(cuid())
+  missionId   String?
+  agentId     String?
+  task        String
+  status      String     @default("pending") // pending, assigned, in_progress, completed, failed
+  result      String?
+  error       String?
+  report      String?    // detailed report from agent on completion
+  priority    String     @default("normal")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  completedAt DateTime?
+  mission     Mission?   @relation(fields: [missionId], references: [id])
+  agent       SubAgent?  @relation(fields: [agentId], references: [id])
+}
+
+model SubAgent {
+  id          String      @id @default(cuid())
+  name        String
+  role        String?     // specialized role: "Image Creator", "Researcher", "SEO Optimizer", etc.
+  skills      String?     // skills/expertise description
+  status      String      @default("idle") // idle, busy, completed, error
+  currentTask String?     // description of current work
+  model       String?     // which AI model they use
+  totalCompleted Int      @default(0)    // total tasks completed by this agent
+  successRate   Float     @default(0.0)  // 0.0 — 1.0, updated after each task
+  specialistSkills String? // auto-accumulated skills learned through experience
+  projectId   String?     // scoped to a project (null = global agent)
+  project     Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  tasks       AgentTask[]
+}
+
+// ─── FEEDBACK (NEW) — User corrections, ratings, suggestions ─
+model Feedback {
+  id        String   @id @default(cuid())
+  taskId    String?   // can be linked to a task
+  missionId String?   // or a mission
+  projectId String?   // scoped to a project (for standalone feedback)
+  type      String    // correction, praise, suggestion, rating
+  content   String?   // what the user said
+  rating    Int?      // 1-5 star rating (only for type=rating)
+  applied   Boolean   @default(false) // has this feedback been incorporated into learning?
+  createdAt DateTime  @default(now())
+  task      Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  mission   Mission?  @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+}
+
+// ─── AGENT QUESTION — Agent asks user for input ──────────────────
+model AgentQuestion {
+  id         String    @id @default(cuid())
+  question   String    // what the agent needs to know
+  context    String?   // e.g., "While working on mission X, I need..."
+  answer     String?   // user's response (null = unanswered)
+  status     String    @default("pending") // pending, answered
+  taskId     String?   // linked to a task (optional)
+  missionId  String?   // linked to a mission (optional)
+  projectId  String?   // scoped to a project
+  createdAt  DateTime  @default(now())
+  answeredAt DateTime?
+  task       Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  mission    Mission?  @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ─── AGENT LEARNING (NEW) — Accumulated wisdom ───────────────
+model AgentLearning {
+  id           String   @id @default(cuid())
+  agentName    String   // "limura", "researcher", "prompt-engineer", etc.
+  category     String   // workflow, preference, mistake
+  insight      String   // what was learned
+  evidence     String?  // what triggered this learning (feedback reference, outcome)
+  confidence   Float    @default(0.5) // 0.0 — 1.0
+  appliedCount Int      @default(0)   // how many times this learning was used
+  projectId    String?  // scoped to a project (null = global learning)
+  project      Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ─── GENERATION TASK — Legacy Adobe Stock pipeline ───────────
 model GenerationTask {
   id           String   @id @default(cuid())
   type         String
@@ -26,12 +178,128 @@ model GenerationTask {
   priority     Int      @default(5)
 }
 
+model UserProfile {
+  id              String    @id @default(cuid())
+  name            String?   // Your name or project identity name
+  role            String?   // Founder, Developer, Designer, etc.
+  skills          String?   // Comma-separated (e.g. "python, design, automation")
+  workStyle       String?   // hands-on, hands-off, collaborative
+  experienceLevel String?   // beginner, intermediate, advanced, expert
+  mission         String?   // What you want to achieve — your driving purpose
+  vision          String?   // Long-term vision — where you see yourself
+  personality     String?   // Brief personality description
+  communicationPref String? // telegram, dashboard, email, concise, detailed
+  activeHours     String?   // When you're active (e.g. "9am-11pm")
+  preferences     String?   // JSON blob — report format, notification style, etc.
+  workflows       String?   // JSON — custom workflows for recurring tasks
+  model           String?   // Preferred AI model for the main agent (e.g. deepseek-v4-flash, claude-sonnet-4)
+  mainGoal        String?   // Primary measurable goal (e.g. "Make $1M in one year")
+  mainGoalTarget  Float?    // Target value for the main goal (e.g. 1000000)
+  setupComplete   Boolean   @default(false)
+  projectId       String?   // null = global user profile, set = per-project profile
+  project         Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
 model DailyStat {
   id        String   @id @default(cuid())
   date      String
+  projectId String?  // scoped to a project (null = global stats)
   type      String
   total     Int      @default(0)
   completed Int      @default(0)
   failed    Int      @default(0)
   avgTime   Float?
+}
+
+// ─── AGENT REQUEST — Agent asks user for info ────────────────
+model AgentRequest {
+  id          String   @id @default(cuid())
+  fieldKey    String   // machine key like "bank_account", "tax_id", "website_url"
+  label       String   // User-facing label like "Bank Account for Payouts"
+  description String?  // Why the agent needs this info
+  fieldType   String   @default("text") // text, number, url, email, file
+  required    Boolean  @default(true)
+  value       String?  // User's answer (null until filled)
+  status      String   @default("pending") // pending, filled, dismissed
+  source      String   @default("agent") // which agent/component requested it
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── VISION MILESTONE — Real-world achievement tracking ──────
+model VisionMilestone {
+  id          String   @id @default(cuid())
+  title       String   // e.g., "Monthly Recurring Revenue"
+  description String?  // e.g., "Target: $5,000 MRR from SaaS products"
+  targetValue Float    // e.g., 5000
+  currentValue Float   @default(0) // e.g., 1200
+  unit        String   @default("") // e.g., "$", "users", "products", "GB"
+  sortOrder   Int      @default(0)
+  projectId   String?  // null = global milestone, set = per-project milestone
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── PROJECT — Named containers with their own mission/vision ─────
+// Each project is a separate entity with a same-named folder on disk.
+// Projects have their own mission and vision, separate from the user's
+// overall profile mission/vision.
+model Project {
+  id          String         @id @default(cuid())
+  name        String                  // Display name
+  slug        String   @unique        // URL/folder-friendly name (kebab-case)
+  description String?
+  mission     String?                 // Project-specific driving purpose
+  vision      String?                 // Project-specific long-term vision
+  status      String   @default("active") // active, archived, completed
+  folderPath  String?                 // Absolute path to the project's folder on disk
+  tasks       Task[]
+  missions    Mission[]
+  subAgents   SubAgent[]
+  profiles    UserProfile[]
+  visionPlans  VisionPlan[]
+  milestones  VisionMilestone[]
+  feedbacks   Feedback[]
+  learnings   AgentLearning[]
+  agentQuestions AgentQuestion[]
+  prerequisites ProjectPrerequisite[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── PROJECT PREREQUISITE — Hard gate checks before execution ──
+// Main agent analyzes biz needs and asks user for required setup data
+// before creating any execution missions. Hard gate: all required must be filled.
+model ProjectPrerequisite {
+  id          String   @id @default(cuid())
+  projectId   String
+  fieldKey    String   // machine key e.g. "website_url", "payment_setup"
+  label       String   // user-facing "Your Website URL"
+  description String?  // why this is needed for the business
+  fieldType   String   @default("text") // text, url, yesno, file
+  required    Boolean  @default(true)
+  value       String?  // user's filled answer (null = not yet provided)
+  status      String   @default("pending") // pending, filled, skipped
+  category    String   @default("setup") // setup, branding, legal, payment, support, marketing
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ─── VISION PLAN — Auto-generated roadmap toward the user's vision ──
+model VisionPlan {
+  id                String   @id @default(cuid())
+  content           String   // Full plan in markdown — next steps, roadmap
+  progress          Float    @default(0.0)  // 0.0 to 1.0 — how far along the vision
+  status            String   @default("pending") // pending, approved, rejected, in_progress, completed
+  missionSnapshot   String?  // What mission was when this plan was generated
+  visionSnapshot    String?  // What vision was when this plan was generated
+  projectId         String?  // null = global vision plan, set = per-project plan
+  project           Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
