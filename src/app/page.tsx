@@ -753,6 +753,24 @@ function OverviewPanel({ setActiveView }: { setActiveView: (v: string) => void }
   const createMission = useCreateMission()
   const [profileData, setProfileData] = useState<any>(null)
 
+  // Poll Claude Code proxy health
+  const [ccConnected, setCcConnected] = useState(false)
+  const [ccData, setCcData] = useState<any>(null)
+  useEffect(() => {
+    let cancelled = false
+    const poll = () => {
+      fetch('http://localhost:8099/health')
+        .then(r => r.json())
+        .then(data => {
+          if (!cancelled) { setCcConnected(true); setCcData(data) }
+        })
+        .catch(() => { if (!cancelled) { setCcConnected(false); setCcData(null) } })
+    }
+    poll()
+    const interval = setInterval(poll, 15000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [])
+
   // Fetch profile for main agent model (project-scoped so model shows up)
   useEffect(() => {
     fetch(`/api/profile${projectId ? `?projectId=${projectId}` : ''}`)
@@ -976,7 +994,36 @@ function OverviewPanel({ setActiveView }: { setActiveView: (v: string) => void }
         </div>
       </motion.div>
 
-      {/* Two-column layout */}
+      {/* Claude Code Status Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.3 }}
+        className="glass-card p-4"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-rose-600 flex items-center justify-center shadow-lg shadow-orange-500/10">
+            <Terminal className="w-5 h-5 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h4 className="text-sm font-semibold text-white">Claude Code</h4>
+              <Badge className={`text-[9px] ${ccConnected ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/15 text-rose-400 border-rose-500/20'}`}>
+                <span className={`w-1 h-1 rounded-full mr-1 ${ccConnected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                {ccConnected ? 'Proxy Online' : 'Offline'}
+              </Badge>
+              <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[9px]">
+                <Cpu className="w-2 h-2 mr-0.5" />
+                {ccData?.default_model || 'deepseek-v4-flash-free'}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500">
+              <span>Code: <span className="text-slate-400">{ccData?.default_model || 'deepseek-v4-flash-free'}</span></span>
+              <span>Blueprint: <span className="text-slate-400">{ccData?.blueprint_model || 'glm-5'}</span></span>
+            </div>
+          </div>
+        </div>
+      </motion.div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 min-w-0">
         {/* Active Agents */}
         <motion.div
