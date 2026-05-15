@@ -10,6 +10,7 @@ import {
   Sparkles, Search, Trash2, ExternalLink, BarChart3, Terminal,
   Pencil, ListTodo, Brain, Target, User, SlidersHorizontal, Save,
   FolderKanban, ArrowLeft, ChevronDown, FolderOpen,
+  ShoppingBag,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -31,6 +32,7 @@ import LiveActivityPanel from '@/components/live-activity-panel'
 import ProjectsPanel, { ProjectDialog } from '@/components/projects-panel'
 import ErrorBoundary from '@/components/error-boundary'
 import VisionPanel from '@/components/vision-panel'
+import StorePanel from '@/components/store-panel'
 import { toast } from '@/hooks/use-toast'
 import { useQueryClient } from '@tanstack/react-query'
 import { MODEL_GROUPS, getModelProvider } from '@/lib/models'
@@ -598,6 +600,7 @@ const NAV_ITEMS = [
   { key: 'learning', label: 'Learning', icon: <Brain className="w-4 h-4" />, color: 'text-purple-400' },
   { key: 'reports', label: 'Reports', icon: <FileText className="w-4 h-4" />, color: 'text-amber-400' },
   { key: 'vision', label: 'Vision Plan', icon: <Sparkles className="w-4 h-4" />, color: 'text-cyan-400' },
+  { key: 'store', label: 'Store', icon: <ShoppingBag className="w-4 h-4" />, color: 'text-emerald-400' },
 ]
 
 function Sidebar({ activeView, setActiveView, stats }: {
@@ -1007,10 +1010,14 @@ function OverviewPanel({ setActiveView }: { setActiveView: (v: string) => void }
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h4 className="text-sm font-semibold text-white">Claude Code</h4>
+              <h4 className="text-sm font-semibold text-white">Coding Agent</h4>
               <Badge className={`text-[9px] ${ccConnected ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/15 text-rose-400 border-rose-500/20'}`}>
                 <span className={`w-1 h-1 rounded-full mr-1 ${ccConnected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                 {ccConnected ? 'Proxy Online' : 'Offline'}
+              </Badge>
+              <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 text-[9px]">
+                <Terminal className="w-2 h-2 mr-0.5" />
+                {ccData?.active_platform || 'Claude Code'}
               </Badge>
               <Badge variant="outline" className="bg-purple-500/10 text-purple-400 border-purple-500/20 text-[9px]">
                 <Cpu className="w-2 h-2 mr-0.5" />
@@ -1018,6 +1025,7 @@ function OverviewPanel({ setActiveView }: { setActiveView: (v: string) => void }
               </Badge>
             </div>
             <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500">
+              <span>Platform: <span className="text-cyan-400">{ccData?.active_platform || 'Claude Code'}</span></span>
               <span>Code: <span className="text-slate-400">{ccData?.default_model || 'deepseek-v4-flash-free'}</span></span>
               <span>Blueprint: <span className="text-slate-400">{ccData?.blueprint_model || 'glm-5'}</span></span>
             </div>
@@ -2610,6 +2618,7 @@ function DashboardInner() {
       case 'learning': return <LearningPanel />
       case 'reports': return <ReportsPanel />
       case 'vision': return <VisionPanel />
+      case 'store': return <StorePanel />
       default: return <OverviewPanel />
     }
   }
